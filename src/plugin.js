@@ -26,7 +26,7 @@ CKEDITOR.coops.Connector = CKEDITOR.tools.createClass({
 
 CKEDITOR.coops.RestClient = CKEDITOR.tools.createClass({   
   $: function(serverUrl) {
-    this._serverUrl = serverUrl + '/1';
+    this._serverUrl = serverUrl;
     this._methodOverrideExtension = null;
   },
   proto : {
@@ -34,7 +34,7 @@ CKEDITOR.coops.RestClient = CKEDITOR.tools.createClass({
       this._methodOverrideExtension = methodOverrideExtension;
     },
   
-    fileJoin: function (fileId, userId, algorithms, protocolVersion, callback) {
+    fileJoin: function (algorithms, protocolVersion, callback) {
       var parameters = new Array();
       for (var i = 0, l = algorithms.length; i < l; i++) {
         parameters.push({
@@ -48,13 +48,13 @@ CKEDITOR.coops.RestClient = CKEDITOR.tools.createClass({
         value: protocolVersion
       });
     
-      var url =  this._serverUrl + '/users/' + userId + '/files/' + fileId + '/join';
+      var url =  this._serverUrl + '/join';
 
       this._doGet(url, parameters, callback);
     },
     
-    fileGet: function (fileId, userId, callback) {
-      var url =  this._serverUrl + '/users/' + userId + '/files/' + fileId;
+    fileGet: function (callback) {
+      var url =  this._serverUrl;
       this._doGet(url, {}, callback);
     },
     
@@ -174,36 +174,50 @@ CKEDITOR.coops.CoOps = CKEDITOR.tools.createClass({
   $: function(editor) {
     this._editor = editor;
     this._lastSelectionRanges = null;
-
-    this._restClient = new CKEDITOR.coops.RestClient(this._editor.config.coops.serverUrl);
+    this._unsavedContent = null;
+    this._savedContent = null;
     
-    // TODO: fileId, userId begone!
+    this._restClient = new CKEDITOR.coops.RestClient(this._editor.config.coops.serverUrl);
+
     // TODO: extensions into extension plugins
-    this._joinFile(this._editor.config.coops.fileId, this._editor.config.coops.userId, ['dmp'], '1.0.0draft1');
+    this._joinFile(['dmp'], '1.0.0draft1');
   },
   proto : {
     getEditor: function () {
       return this._editor;
     },
+    getRestClient: function(callback) {
+      return this._restClient;
+    },
+    isLocallyChanged: function () {
+      return this._unsavedContent != this._savedContent;
+    },
+    getUnsavedContent: function () {
+      return this._unsavedContent;
+    },
+    getSavedContent: function () {
+      return this._savedContent;
+    },
+    setUnsavedContent: function (unsavedContent) {
+      this._unsavedContent = unsavedContent;
+    },
+    setSavedContent: function (savedContent) {
+      this._savedContent = savedContent;
+    },
   
-    _joinFile: function (fileId, userId, algorithms, protocolVersion) {
+    _joinFile: function (algorithms, protocolVersion) {
       var _this = this;
-      this._restClient.fileJoin(fileId, userId, algorithms, protocolVersion, function (status, responseJson, error) {
+      this._restClient.fileJoin(algorithms, protocolVersion, function (status, responseJson, error) {
         _this._loadFile(responseJson.response);
       });
     },
     _loadFile: function (joinData) {
-      var session = joinData.session;
-
       var _this = this;
-      this._restClient.fileGet(session.fileId, session.userId, function (status, responseJson, error) {
-        _this._startSession(joinData, responseJson.response.file.content, responseJson.response.file.revisionNumber);
+      this._restClient.fileGet(function (status, responseJson, error) {
+        _this._startSession(joinData, responseJson.response.content, responseJson.response.revisionNumber);
       });
     },
     _startSession: function(joinData, content, revisionNumber) {
-      // TODO: setData vs setHtml?
-      // this._editor.setData(content);
-      
       this.getEditor().getChangeObserver().pause();
       try {
         this.getEditor().getSelection().removeAllRanges();
@@ -212,7 +226,7 @@ CKEDITOR.coops.CoOps = CKEDITOR.tools.createClass({
         this.getEditor().getChangeObserver().reset();
         this.getEditor().getChangeObserver().resume();
       }
-      
+
       var extensions = joinData.extensions;
      
       if (extensions.indexOf('x-http-method-override') > -1) {
@@ -274,9 +288,29 @@ CKEDITOR.coops.CoOps = CKEDITOR.tools.createClass({
 
 CKEDITOR.plugins.add( 'coops', {
   requires: ['change'],
+  onLoad : function() {
+    CKEDITOR.tools.extend(CKEDITOR.editor.prototype, {
+      getCoOps: function () {
+        return this._coOps;
+      }
+    });
+  },
   init: function( editor ) {  
     editor.on( 'instanceReady', function(event) {
       editor._coOps = new CKEDITOR.coops.CoOps(editor);
     });
+      
+    editor.on('contentChange', function(event) {
+      editor._coOps.setUnsavedContent(event.data.currentContent);
+    });
+  
+    editor.on('CoOPS:PatchAccepted', function(event) {
+      editor._coOps.setSavedContent(this.getData());
+    });
+  
+    editor.on('CoOPS:ContentReverted', function(event) {
+      editor._coOps.setSavedContent(event.data.content);
+    });
+
   }
 });
